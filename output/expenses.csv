@@ -1,0 +1,4 @@
+file,merchant,date,total,category
+receipt_01.png,Carrefour City,2026-05-15,16.41,groceries
+receipt_02.png,Monoprix,2026-05-22,7.2,groceries
+receipt_03.png,Pharmacie De La Mairie,2026-06-02,10.68,pharmacy
