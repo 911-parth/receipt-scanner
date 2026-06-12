@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>receipt-scanner — in-browser OCR demo</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f6f7f9; color: #1f2430; line-height: 1.5; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 1.7rem; margin-bottom: 4px; }
+  .sub { color: #6b7280; margin-bottom: 24px; }
+  .sub a { color: #3556c7; }
+  .panel { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .samples { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .samples img { width: 110px; border: 2px solid #e3e6ea; border-radius: 8px; cursor: pointer; background: #fff; }
+  .samples img:hover { border-color: #3556c7; }
+  #preview { max-width: 100%; border: 1px solid #e3e6ea; border-radius: 10px; background: #fff; display: none; }
+  .drop { border: 2px dashed #c9cdd4; border-radius: 10px; padding: 26px; text-align: center; color: #6b7280; background: #fff; cursor: pointer; }
+  .drop.over { border-color: #3556c7; background: #eef1fb; }
+  .result { background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; padding: 18px; min-height: 200px; }
+  .result h2 { font-size: 1rem; margin: 0 0 12px; }
+  .field { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid #f0f1f3; }
+  .field b { font-variant-numeric: tabular-nums; }
+  .badge { background: #eef1fb; color: #3556c7; border-radius: 5px; padding: 2px 9px; font-size: 0.85rem; }
+  #status { color: #6b7280; font-size: 0.9rem; margin-top: 10px; }
+  progress { width: 100%; }
+  details { margin-top: 14px; }
+  pre { background: #f6f7f9; border-radius: 8px; padding: 10px; font-size: 0.75rem; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+  footer { color: #6b7280; font-size: 0.85rem; margin-top: 40px; border-top: 1px solid #e3e6ea; padding-top: 16px; }
+  footer a { color: #3556c7; }
+  @media (max-width: 700px) { .panel { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>receipt-scanner</h1>
+  <p class="sub">OCR a receipt and extract merchant, date and total — running entirely in your
+  browser with tesseract.js. The original project (<a href="https://github.com/911-parth/receipt-scanner">GitHub</a>)
+  is Python: OpenCV preprocessing + Tesseract + regex parsing. This page ports the parsing logic to JS
+  so anyone can try it without installing anything.</p>
+
+  <p>Try a sample receipt, or drop your own photo:</p>
+  <div class="samples">
+    <img src="receipt_01.png" alt="sample receipt 1" onclick="scanUrl(this.src)">
+    <img src="receipt_02.png" alt="sample receipt 2" onclick="scanUrl(this.src)">
+    <img src="receipt_03.png" alt="sample receipt 3" onclick="scanUrl(this.src)">
+  </div>
+
+  <div class="panel">
+    <div>
+      <div class="drop" id="drop">drop a receipt image here, or click to choose a file</div>
+      <input type="file" id="file" accept="image/*" hidden>
+      <div id="status"></div>
+      <progress id="bar" max="1" value="0" hidden></progress>
+      <br><br>
+      <img id="preview" alt="receipt preview">
+    </div>
+    <div class="result">
+      <h2>Extracted fields</h2>
+      <div class="field"><span>Merchant</span><b id="merchant">—</b></div>
+      <div class="field"><span>Date</span><b id="date">—</b></div>
+      <div class="field"><span>Total</span><b id="total">—</b></div>
+      <div class="field"><span>Category</span><b><span class="badge" id="category">—</span></b></div>
+      <details>
+        <summary>Raw OCR text</summary>
+        <pre id="raw"></pre>
+      </details>
+    </div>
+  </div>
+
+  <footer>
+    Built by <a href="https://github.com/911-parth">Parth Chauhan</a>. Nothing is uploaded —
+    OCR runs locally in your browser. Crumpled thermal paper still wins sometimes.
+  </footer>
+</div>
+
+<script>
+// --- parsing logic, ported from scanner/parser.py ---
+const AMOUNT = /(\d{1,4})\s*[.,]\s*(\d{2})/g;
+const TOTAL_KEYWORDS = ["total", "montant", "a payer", "à payer", "ttc", "somme"];
+const SKIP_KEYWORDS = ["sous-total", "subtotal", "tva", "rendu", "espece", "espèce", "carte", "cb ", "change", "cash"];
+const DATE_PATTERNS = [
+  /(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})/,
+  /(\d{4})[\/.\-](\d{2})[\/.\-](\d{2})/,
+];
+const CATEGORIES = {
+  groceries: ["carrefour", "monoprix", "lidl", "auchan", "franprix", "leclerc", "intermarche", "casino", "aldi", "biocoop"],
+  restaurants: ["mcdonald", "burger", "kebab", "pizza", "sushi", "restaurant", "brasserie", "tacos", "kfc", "subway"],
+  transport: ["sncf", "ratp", "navigo", "uber", "bolt", "blablacar", "essence"],
+  pharmacy: ["pharmacie", "parapharmacie"],
+  shopping: ["fnac", "zara", "uniqlo", "decathlon", "ikea", "action", "amazon"],
+  coffee: ["starbucks", "columbus", "cafe", "café", "coffee"],
+};
+
+function parseReceipt(text) {
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  return { merchant: findMerchant(lines), date: findDate(lines), total: findTotal(lines) };
+}
+
+function findMerchant(lines) {
+  for (const line of lines.slice(0, 5)) {
+    const cleaned = line.replace(/[^A-Za-zÀ-ÿ' ]/g, "").trim();
+    if (cleaned.length >= 3 && cleaned === cleaned.toUpperCase()) {
+      return cleaned.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    }
+  }
+  for (const line of lines.slice(0, 5)) {
+    if (/[A-Za-z]{3}/.test(line)) return line.slice(0, 40);
+  }
+  return "Unknown";
+}
+
+function findDate(lines) {
+  for (const line of lines) {
+    for (const p of DATE_PATTERNS) {
+      const m = line.match(p);
+      if (!m) continue;
+      let [_, a, b, c] = m;
+      let d = a.length === 4 ? new Date(+a, +b - 1, +c) : new Date(+c, +b - 1, +a);
+      if (!isNaN(d) && d.getFullYear() > 2000 && d.getFullYear() < 2100) {
+        return d.toISOString().slice(0, 10);
+      }
+    }
+  }
+  return null;
+}
+
+function findTotal(lines) {
+  const candidates = [];
+  for (const line of lines) {
+    const low = line.toLowerCase();
+    if (SKIP_KEYWORDS.some(k => low.includes(k))) continue;
+    if (TOTAL_KEYWORDS.some(k => low.includes(k))) {
+      for (const m of line.matchAll(AMOUNT)) candidates.push(parseFloat(m[1] + "." + m[2]));
+    }
+  }
+  if (candidates.length) return Math.max(...candidates);
+  const amounts = [];
+  for (const line of lines) {
+    const low = line.toLowerCase();
+    if (SKIP_KEYWORDS.some(k => low.includes(k))) continue;
+    for (const m of line.matchAll(AMOUNT)) amounts.push(parseFloat(m[1] + "." + m[2]));
+  }
+  return amounts.length ? Math.max(...amounts) : null;
+}
+
+function categorize(merchant) {
+  const m = merchant.toLowerCase();
+  for (const [cat, kws] of Object.entries(CATEGORIES)) {
+    if (kws.some(k => m.includes(k))) return cat;
+  }
+  return "other";
+}
+
+// --- UI wiring ---
+const els = id => document.getElementById(id);
+const drop = els("drop"), fileInput = els("file"), bar = els("bar");
+
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => fileInput.files[0] && scanFile(fileInput.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => {
+  e.preventDefault();
+  drop.classList.remove("over");
+  if (e.dataTransfer.files[0]) scanFile(e.dataTransfer.files[0]);
+};
+
+function scanFile(file) {
+  const url = URL.createObjectURL(file);
+  scanUrl(url);
+}
+
+async function scanUrl(url) {
+  els("preview").src = url;
+  els("preview").style.display = "block";
+  ["merchant", "date", "total", "category"].forEach(id => els(id).textContent = "—");
+  els("raw").textContent = "";
+  bar.hidden = false;
+  bar.value = 0;
+  els("status").textContent = "Loading OCR engine (first run downloads ~2 MB)...";
+  try {
+    const worker = await Tesseract.createWorker("eng", 1, {
+      logger: m => {
+        if (m.status === "recognizing text") {
+          bar.value = m.progress;
+          els("status").textContent = "Reading receipt... " + Math.round(m.progress * 100) + "%";
+        }
+      },
+    });
+    const { data } = await worker.recognize(url);
+    await worker.terminate();
+    const fields = parseReceipt(data.text);
+    els("merchant").textContent = fields.merchant || "not found";
+    els("date").textContent = fields.date || "not found";
+    els("total").textContent = fields.total != null ? fields.total.toFixed(2) + " EUR" : "not found";
+    els("category").textContent = categorize(fields.merchant || "");
+    els("raw").textContent = data.text;
+    els("status").textContent = "Done.";
+  } catch (err) {
+    els("status").textContent = "OCR failed: " + err.message;
+  }
+  bar.hidden = true;
+}
+</script>
+</body>
+</html>
