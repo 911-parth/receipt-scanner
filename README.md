@@ -5,7 +5,7 @@ into a spreadsheet by hand lasted exactly four days. This scans a photo of a
 receipt, reads it with OCR, pulls out the merchant / date / total, sorts it
 into a category and logs everything to a CSV.
 
-**[Try it in your browser](https://911-parth.github.io/receipt-scanner/)** — the demo runs the OCR client-side with tesseract.js, nothing gets uploaded.
+**[Use it in your browser](https://911-parth.github.io/receipt-scanner/)** — scan receipts and keep an expense log, all client-side with tesseract.js. Nothing gets uploaded, the log lives in your browser storage.
 
 It started as a follow-up to an earlier OCR project of mine (image text
 extraction with OpenCV) — this one goes further: the goal isn't just reading

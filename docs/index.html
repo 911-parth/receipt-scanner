@@ -27,6 +27,21 @@
   progress { width: 100%; }
   details { margin-top: 14px; }
   pre { background: #f6f7f9; border-radius: 8px; padding: 10px; font-size: 0.75rem; white-space: pre-wrap; max-height: 240px; overflow: auto; }
+  .save-btn { margin-top: 14px; width: 100%; background: #3556c7; color: #fff; border: none; border-radius: 8px; padding: 11px; font-size: 0.95rem; cursor: pointer; }
+  .save-btn:disabled { background: #c9cdd4; cursor: default; }
+  .log { margin-top: 34px; background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; padding: 18px; }
+  .log h2 { font-size: 1.1rem; margin: 0 0 4px; }
+  .muted { color: #6b7280; font-size: 0.88rem; }
+  #log-cats { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  #log-cats .badge { font-size: 0.82rem; }
+  #log-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  #log-table th, #log-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #f0f1f3; }
+  #log-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  #log-table .del { background: none; border: none; color: #9aa0a8; cursor: pointer; font-size: 1.05rem; }
+  #log-table .del:hover { color: #d64545; }
+  .log-actions { display: flex; gap: 10px; margin-top: 14px; }
+  .log-actions button { border: 1px solid #d6dae0; background: #fff; border-radius: 7px; padding: 8px 14px; cursor: pointer; }
+  .log-actions .danger { color: #d64545; border-color: #ecc8c8; }
   footer { color: #6b7280; font-size: 0.85rem; margin-top: 40px; border-top: 1px solid #e3e6ea; padding-top: 16px; }
   footer a { color: #3556c7; }
   @media (max-width: 700px) { .panel { grid-template-columns: 1fr; } }
@@ -35,10 +50,10 @@
 <body>
 <div class="wrap">
   <h1>receipt-scanner</h1>
-  <p class="sub">OCR a receipt and extract merchant, date and total — running entirely in your
-  browser with tesseract.js. The original project (<a href="https://github.com/911-parth/receipt-scanner">GitHub</a>)
-  is Python: OpenCV preprocessing + Tesseract + regex parsing. This page ports the parsing logic to JS
-  so anyone can try it without installing anything.</p>
+  <p class="sub">Scan your receipts and keep a running expense log — entirely in your browser
+  with tesseract.js. Nothing is uploaded and your log stays in your browser's storage.
+  The original project (<a href="https://github.com/911-parth/receipt-scanner">GitHub</a>)
+  is Python: OpenCV preprocessing + Tesseract + regex parsing, ported to JS here so anyone can use it.</p>
 
   <p>Try a sample receipt, or drop your own photo:</p>
   <div class="samples">
@@ -66,6 +81,22 @@
         <summary>Raw OCR text</summary>
         <pre id="raw"></pre>
       </details>
+      <button id="save" class="save-btn" disabled>Add to my expense log</button>
+    </div>
+  </div>
+
+  <div class="log">
+    <h2>My expense log <span id="log-total" class="badge"></span></h2>
+    <p class="muted">Stored in your browser only. Scan a receipt above, check the fields, then add it.</p>
+    <div id="log-cats"></div>
+    <table id="log-table">
+      <thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th class="num">Total</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="log-empty" class="muted">No expenses yet.</p>
+    <div class="log-actions">
+      <button id="export">Export CSV</button>
+      <button id="clear" class="danger">Clear log</button>
     </div>
   </div>
 
@@ -198,11 +229,69 @@ async function scanUrl(url) {
     els("category").textContent = categorize(fields.merchant || "");
     els("raw").textContent = data.text;
     els("status").textContent = "Done.";
+    lastScan = { date: fields.date, merchant: fields.merchant || "Unknown",
+                 total: fields.total, category: categorize(fields.merchant || "") };
+    els("save").disabled = !(lastScan.total != null);
   } catch (err) {
     els("status").textContent = "OCR failed: " + err.message;
   }
   bar.hidden = true;
 }
+
+// --- expense log (localStorage) ---
+const LOG_KEY = "receipt-scanner-log";
+let lastScan = null;
+
+function loadLog() { return JSON.parse(localStorage.getItem(LOG_KEY) || "[]"); }
+function saveLog(log) { localStorage.setItem(LOG_KEY, JSON.stringify(log)); }
+
+els("save").onclick = () => {
+  if (!lastScan) return;
+  const log = loadLog();
+  log.push({ ...lastScan, id: Date.now() });
+  saveLog(log);
+  els("save").disabled = true;
+  renderLog();
+};
+
+els("clear").onclick = () => {
+  if (confirm("Delete the whole expense log?")) { saveLog([]); renderLog(); }
+};
+
+els("export").onclick = () => {
+  const log = loadLog();
+  const csv = ["date,merchant,category,total",
+    ...log.map(e => `${e.date || ""},"${(e.merchant || "").replace(/"/g, "'")}",${e.category},${e.total}`),
+  ].join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "expenses.csv";
+  a.click();
+};
+
+function renderLog() {
+  const log = loadLog();
+  const tbody = document.querySelector("#log-table tbody");
+  tbody.innerHTML = "";
+  log.slice().reverse().forEach(e => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${e.date || "?"}</td><td>${e.merchant}</td><td>${e.category}</td>` +
+      `<td class="num">${e.total.toFixed(2)} EUR</td>` +
+      `<td><button class="del" data-id="${e.id}" title="remove">×</button></td>`;
+    tbody.appendChild(tr);
+  });
+  tbody.querySelectorAll(".del").forEach(b => {
+    b.onclick = () => { saveLog(loadLog().filter(e => e.id !== +b.dataset.id)); renderLog(); };
+  });
+  const total = log.reduce((s, e) => s + e.total, 0);
+  els("log-total").textContent = log.length ? total.toFixed(2) + " EUR" : "";
+  els("log-empty").style.display = log.length ? "none" : "block";
+  const cats = {};
+  log.forEach(e => cats[e.category] = (cats[e.category] || 0) + e.total);
+  els("log-cats").innerHTML = Object.entries(cats).sort((a, b) => b[1] - a[1])
+    .map(([c, v]) => `<span class="badge">${c}: ${v.toFixed(2)} EUR</span>`).join("");
+}
+renderLog();
 </script>
 </body>
 </html>
