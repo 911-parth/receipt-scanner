@@ -154,7 +154,8 @@ function findDate(lines) {
       let [_, a, b, c] = m;
       let d = a.length === 4 ? new Date(+a, +b - 1, +c) : new Date(+c, +b - 1, +a);
       if (!isNaN(d) && d.getFullYear() > 2000 && d.getFullYear() < 2100) {
-        return d.toISOString().slice(0, 10);
+        const pad = n => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       }
     }
   }
